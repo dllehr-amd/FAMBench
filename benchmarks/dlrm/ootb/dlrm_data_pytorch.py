@@ -968,6 +968,10 @@ def generate_dist_input_batch(
             elif rand_data_dist == "uniform":
                 r = ra.random(sparse_group_size)
                 sparse_group = np.unique(np.round(r * (size - 1)).astype(np.int64))
+            elif rand_data_dist == "zipf":
+                r = ra.zipf(a=1.15, size=sparse_group_size)
+                sparse_group = np.clip(r, rand_data_min, rand_data_max)
+                sparse_group = np.unique(sparse_group).astype(np.int64)
             else:
                 raise(rand_data_dist, "distribution is not supported. \
                      please select uniform or gaussian")
