@@ -160,7 +160,6 @@ with warnings.catch_warnings():
 
 exc = getattr(builtins, "IOError", "FileNotFoundError")
 
-
 def time_wrap(use_gpu):
     if use_gpu:
         torch.cuda.synchronize()
@@ -169,6 +168,7 @@ def time_wrap(use_gpu):
 
 def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices=1):
     with record_function("DLRM forward"):
+        print("INFO: DLRM Forward Pass")
         if dlrm.quantize_mlp_input_with_half_call:
             X = X.half()
         if use_gpu:
@@ -1351,6 +1351,7 @@ def inference(
 
 
 def run():
+    print("INFO: Entering run function")
     ### parse arguments ###
     parser = argparse.ArgumentParser(
         description="Train Deep Learning Recommendation Model (DLRM)"
@@ -1486,6 +1487,7 @@ def run():
 
     parser.add_argument("--precache-ml-data", type=int, nargs='?', default=None, const=sys.maxsize)
     parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--profile-steps", type=int, default=0)
     # FB5 Logging
     parser.add_argument("--fb5logger", type=str, default=None)
     parser.add_argument("--fb5config", type=str, default="tiny")
@@ -2113,9 +2115,15 @@ def run():
             pass
 
     ext_dist.barrier()
-    with torch.autograd.profiler.profile(
-        args.enable_profiling, use_cuda=use_gpu, record_shapes=True
-    ) as prof:
+    from rpdTracerControl import rpdTracerControl
+    # Optionally call this class method before creating first instance
+    rpdTracerControl.setFilename(name = "trace.rpd", append=True)
+
+    # Create first instance (this loads the profiler and creates the file)
+    profile = rpdTracerControl()
+
+    with torch.autograd.profiler.emit_nvtx(args.enable_profiling):
+        profile.stop()
 
         if not args.inference_only:
 
@@ -2158,7 +2166,14 @@ def run():
                         continue
 
                     if k == 0 and j == args.warmup_steps:
+                        if(args.enable_profiling):
+                            print("INFO: Starting NVTX profiling")
+                            profile.start()
                         bmlogger.run_start()
+
+                    if (j == args.profile_steps + args.warmup_steps) and args.enable_profiling:
+                        print("INFO: Stopping NVTX profiling")
+                        profile.stop()
 
                     X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
 
@@ -2217,6 +2232,7 @@ def run():
                     # A = np.sum((np.round(S, 0) == T).astype(np.uint8))
 
                     with record_function("DLRM backward"):
+                        print("INFO: DLRM backward")
                         # Update optimizer parameters to train weights instantiated lazily in
                         # the parallel_forward call.
                         if dlrm.ndevices_available > 1 and dlrm.add_new_weights_to_params:
@@ -2459,17 +2475,11 @@ def run():
             )
 
     # profiling
-    if args.enable_profiling:
-        time_stamp = str(datetime.datetime.now()).replace(" ", "_")
-        with open("dlrm_s_pytorch" + time_stamp + "_shape.prof", "w") as prof_f:
-            prof_f.write(
-                prof.key_averages(group_by_input_shape=True).table(
-                    sort_by="self_cpu_time_total"
-                )
-            )
-        with open("dlrm_s_pytorch" + time_stamp + "_total.prof", "w") as prof_f:
-            prof_f.write(prof.key_averages().table(sort_by="self_cpu_time_total"))
-        prof.export_chrome_trace("dlrm_s_pytorch" + time_stamp + ".json")
+    # if args.enable_profiling:
+    #     time_stamp = str(datetime.datetime.now()).replace(" ", "_")
+    #     with open("dlrm_s_pytorch" + time_stamp + "_total.prof", "w") as prof_f:
+    #         prof_f.write(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=-1))
+    #     prof.export_chrome_trace("dlrm_s_pytorch" + time_stamp + ".json")
         # print(prof.key_averages().table(sort_by="cpu_time_total"))
 
     # plot compute graph
